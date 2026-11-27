@@ -298,7 +298,175 @@
             soundEnabled: true,
             visualsVisible: true,
             answered: false,
-            hintUsed: false
+            hintUsed: false,
+            feedbackKind: 'none',
+            earnedPoints: 0,
+            guideOpen: false
+        };
+
+        const SAVE_SCHEMA_VERSION = 1;
+        const DIFFICULTY_BOUNDS = {
+            easy: { minDenom: 2, maxDenom: 4, minWhole: 1, maxWhole: 3 },
+            medium: { minDenom: 3, maxDenom: 6, minWhole: 1, maxWhole: 4 },
+            hard: { minDenom: 5, maxDenom: 9, minWhole: 2, maxWhole: 5 },
+            expert: { minDenom: 8, maxDenom: 15, minWhole: 3, maxWhole: 8 },
+            master: { minDenom: 12, maxDenom: 25, minWhole: 5, maxWhole: 12 }
+        };
+        const ANSWER_POINTS = { easy: 10, medium: 10, hard: 15, expert: 20, master: 30 };
+
+        function isPlainObject(value) {
+            return value !== null && typeof value === 'object' && !Array.isArray(value);
+        }
+
+        function isIntegerBetween(value, min, max) {
+            return Number.isSafeInteger(value) && value >= min && value <= max;
+        }
+
+        function readAnswerInputs() {
+            const valueFor = id => document.getElementById(id)?.value ?? '';
+            return {
+                whole: valueFor('inputWhole'),
+                numerator: valueFor('inputNum'),
+                denominator: valueFor('inputDenom'),
+                improperNumerator: valueFor('inputImpNum'),
+                improperDenominator: valueFor('inputImpDenom')
+            };
+        }
+
+        function validateGameData(data) {
+            if (!isPlainObject(data) || data.schemaVersion !== SAVE_SCHEMA_VERSION ||
+                !isPlainObject(data.settings) || !isPlainObject(data.progress) ||
+                !isPlainObject(data.progress.question) ||
+                !isPlainObject(data.progress.answerInputs) || !isPlainObject(data.ui)) {
+                return null;
+            }
+
+            const { settings, progress, ui } = data;
+            const bounds = DIFFICULTY_BOUNDS[settings.difficulty];
+            const question = progress.question;
+            const inputs = progress.answerInputs;
+            const feedbackKinds = ['none', 'hint', 'incomplete', 'incorrect', 'incorrectDenominator', 'correct'];
+            const inputKeys = ['whole', 'numerator', 'denominator', 'improperNumerator', 'improperDenominator'];
+            if (!['mixed', 'toMixed', 'toImproper'].includes(settings.mode) ||
+                !bounds || typeof settings.soundEnabled !== 'boolean' ||
+                typeof settings.visualsVisible !== 'boolean' ||
+                !['toMixed', 'toImproper'].includes(progress.currentType) ||
+                (settings.mode !== 'mixed' && settings.mode !== progress.currentType) ||
+                !isIntegerBetween(question.denominator, bounds.minDenom, bounds.maxDenom) ||
+                !isIntegerBetween(question.whole, bounds.minWhole, bounds.maxWhole) ||
+                !isIntegerBetween(question.numerator, 1, question.denominator - 1) ||
+                question.improperNumerator !== question.whole * question.denominator + question.numerator ||
+                !['question', 'awaitingNext'].includes(progress.phase) ||
+                typeof progress.hintUsed !== 'boolean' ||
+                !feedbackKinds.includes(progress.feedbackKind) ||
+                !isIntegerBetween(progress.score, 0, 1000000000) ||
+                !isIntegerBetween(progress.streak, 0, 1000000) ||
+                !isIntegerBetween(progress.earnedPoints, 0, 30) ||
+                typeof ui.guideOpen !== 'boolean' ||
+                !inputKeys.every(key =>
+                    typeof inputs[key] === 'string' &&
+                    inputs[key].length <= 3 &&
+                    /^[0-9]*$/.test(inputs[key]))) {
+                return null;
+            }
+
+            const isSolved = progress.phase === 'awaitingNext';
+            const expectedPoints = Math.ceil(ANSWER_POINTS[settings.difficulty] / (progress.hintUsed ? 2 : 1));
+            const answerIsCorrect = progress.currentType === 'toMixed'
+                ? Number(inputs.whole) === question.whole &&
+                  Number(inputs.numerator) === question.numerator &&
+                  Number(inputs.denominator) === question.denominator
+                : Number(inputs.improperNumerator) === question.improperNumerator &&
+                  Number(inputs.improperDenominator) === question.denominator;
+            if ((isSolved && (progress.feedbackKind !== 'correct' ||
+                    !answerIsCorrect || progress.earnedPoints !== expectedPoints ||
+                    progress.score < progress.earnedPoints)) ||
+                (!isSolved && (progress.feedbackKind === 'correct' || progress.earnedPoints !== 0)) ||
+                (progress.feedbackKind === 'hint' && !progress.hintUsed)) {
+                return null;
+            }
+
+            return { settings, progress, ui };
+        }
+
+        window.saveGameData = function() {
+            return {
+                schemaVersion: SAVE_SCHEMA_VERSION,
+                settings: {
+                    mode: gameState.mode,
+                    difficulty: gameState.difficulty,
+                    soundEnabled: gameState.soundEnabled,
+                    visualsVisible: gameState.visualsVisible
+                },
+                progress: {
+                    phase: gameState.answered ? 'awaitingNext' : 'question',
+                    score: gameState.score,
+                    streak: gameState.streak,
+                    currentType: gameState.currentType,
+                    question: {
+                        whole: gameState.whole,
+                        numerator: gameState.numerator,
+                        denominator: gameState.denominator,
+                        improperNumerator: gameState.improperNumerator
+                    },
+                    answerInputs: readAnswerInputs(),
+                    hintUsed: gameState.hintUsed,
+                    feedbackKind: gameState.feedbackKind,
+                    earnedPoints: gameState.earnedPoints
+                },
+                ui: {
+                    guideOpen: gameState.guideOpen
+                }
+            };
+        };
+
+        window.loadGameData = function(data) {
+            if (isPlainObject(data) && Object.keys(data).length === 0) return false;
+            const saved = validateGameData(data);
+            if (!saved) {
+                console.warn('ذخیره‌ی بازی نامعتبر است؛ بازیابی نادیده گرفته شد.');
+                return false;
+            }
+
+            const { settings, progress, ui } = saved;
+            gameState.mode = settings.mode;
+            gameState.difficulty = settings.difficulty;
+            gameState.soundEnabled = settings.soundEnabled;
+            gameState.visualsVisible = settings.visualsVisible;
+            gameState.currentType = progress.currentType;
+            gameState.whole = progress.question.whole;
+            gameState.numerator = progress.question.numerator;
+            gameState.denominator = progress.question.denominator;
+            gameState.improperNumerator = progress.question.improperNumerator;
+            gameState.score = progress.score;
+            gameState.streak = progress.streak;
+            gameState.answered = progress.phase === 'awaitingNext';
+            gameState.hintUsed = progress.hintUsed;
+            gameState.feedbackKind = progress.feedbackKind;
+            gameState.earnedPoints = progress.earnedPoints;
+            gameState.guideOpen = ui.guideOpen;
+
+            updateSettingsUI();
+            renderQuestionUI(true);
+            for (const [key, id] of Object.entries({
+                whole: 'inputWhole',
+                numerator: 'inputNum',
+                denominator: 'inputDenom',
+                improperNumerator: 'inputImpNum',
+                improperDenominator: 'inputImpDenom'
+            })) {
+                const input = document.getElementById(id);
+                if (input) input.value = progress.answerInputs[key];
+            }
+            updateScoreboard();
+            document.getElementById('soundToggleBtn').textContent = gameState.soundEnabled ? '🔊' : '🔇';
+            document.getElementById('pizzaContainer').classList.toggle('hidden', !gameState.visualsVisible);
+            document.getElementById('toggleVisualBtn').textContent = gameState.visualsVisible
+                ? 'مخفی کردن شکل'
+                : 'نمایش شکل پیتزا';
+            document.getElementById('guideModal').classList.toggle('hidden', !gameState.guideOpen);
+            renderSavedFeedback();
+            return true;
         };
 
         // --- تبدیل اعداد انگلیسی به فارسی برای نمایش زیباتر ---
@@ -342,26 +510,32 @@
             btn.textContent = gameState.soundEnabled ? '🔊' : '🔇';
         }
 
+        function updateSettingsUI() {
+            document.querySelectorAll('.mode-btn').forEach(btn => {
+                const isActive = btn.id === `mode-${gameState.mode}`;
+                btn.classList.toggle('bg-amber-500', isActive);
+                btn.classList.toggle('text-white', isActive);
+                btn.classList.toggle('shadow', isActive);
+                btn.classList.toggle('text-amber-900', !isActive);
+                btn.classList.toggle('hover:bg-amber-200/70', !isActive);
+            });
+            document.getElementById('difficultySelect').value = gameState.difficulty;
+        }
+
         // --- مدیریت حالت بازی و سطح دشواری ---
         function setGameMode(newMode) {
+            if (!['mixed', 'toMixed', 'toImproper'].includes(newMode)) return;
             playSound('click');
             gameState.mode = newMode;
-            
-            // به‌روزرسانی ظاهر دکمه‌ها
-            document.querySelectorAll('.mode-btn').forEach(btn => {
-                btn.classList.remove('bg-amber-500', 'text-white', 'shadow');
-                btn.classList.add('text-amber-900', 'hover:bg-amber-200/70');
-            });
-            const activeBtn = document.getElementById(`mode-${newMode}`);
-            activeBtn.classList.remove('text-amber-900', 'hover:bg-amber-200/70');
-            activeBtn.classList.add('bg-amber-500', 'text-white', 'shadow');
-
+            updateSettingsUI();
             generateQuestion();
         }
 
         function changeDifficulty() {
+            const difficulty = document.getElementById('difficultySelect').value;
+            if (!DIFFICULTY_BOUNDS[difficulty]) return;
             playSound('click');
-            gameState.difficulty = document.getElementById('difficultySelect').value;
+            gameState.difficulty = difficulty;
             generateQuestion();
         }
 
@@ -380,6 +554,7 @@
 
         function toggleGuideModal(show) {
             playSound('click');
+            gameState.guideOpen = show;
             const modal = document.getElementById('guideModal');
             if (show) modal.classList.remove('hidden');
             else modal.classList.add('hidden');
@@ -389,6 +564,8 @@
         function generateQuestion() {
             gameState.answered = false;
             gameState.hintUsed = false;
+            gameState.feedbackKind = 'none';
+            gameState.earnedPoints = 0;
 
             // تعیین نوع سوال فعلی
             if (gameState.mode === 'mixed') {
@@ -398,16 +575,7 @@
             }
 
             // تعیین بازه اعداد بر اساس سطح دشواری
-            let minDenom = 2, maxDenom = 4, minWhole = 1, maxWhole = 3;
-            if (gameState.difficulty === 'medium') {
-                minDenom = 3; maxDenom = 6; minWhole = 1; maxWhole = 4;
-            } else if (gameState.difficulty === 'hard') {
-                minDenom = 5; maxDenom = 9; minWhole = 2; maxWhole = 5;
-            } else if (gameState.difficulty === 'expert') {
-                minDenom = 8; maxDenom = 15; minWhole = 3; maxWhole = 8;
-            } else if (gameState.difficulty === 'master') {
-                minDenom = 12; maxDenom = 25; minWhole = 5; maxWhole = 12;
-            }
+            const { minDenom, maxDenom, minWhole, maxWhole } = DIFFICULTY_BOUNDS[gameState.difficulty];
 
             // تولید مخرج، عدد صحیح و صورت
             const denom = Math.floor(Math.random() * (maxDenom - minDenom + 1)) + minDenom;
@@ -423,7 +591,7 @@
         }
 
         // --- رسم پیتزاهای SVG برای درک شهودی کسر ---
-        function renderPizzas() {
+        function renderPizzas(animate = true) {
             const container = document.getElementById('pizzaContainer');
             container.innerHTML = '';
             document.getElementById('visualDenominatorText').textContent = toPersianDigits(gameState.denominator);
@@ -452,7 +620,9 @@
                 remainingSlices -= filledInThisPizza;
 
                 const pizzaWrapper = document.createElement('div');
-                pizzaWrapper.className = 'flex flex-col items-center pizza-pop';
+                pizzaWrapper.className = animate
+                    ? 'flex flex-col items-center pizza-pop'
+                    : 'flex flex-col items-center';
                 pizzaWrapper.style.animationDelay = `${Math.min(p * 0.05, 0.5)}s`;
 
                 let svgContent = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" class="drop-shadow-md">`;
@@ -503,7 +673,7 @@
         }
 
         // --- رندر کردن رابط کاربری سوال ---
-        function renderQuestionUI() {
+        function renderQuestionUI(restoring = false) {
             const badge = document.getElementById('questionTypeBadge');
             const prompt = document.getElementById('questionPrompt');
             const givenExpr = document.getElementById('givenExpression');
@@ -517,7 +687,8 @@
             checkBtn.classList.remove('hidden');
             nextBtn.classList.add('hidden');
 
-            renderPizzas();
+            renderPizzas(!restoring);
+            document.getElementById('pizzaContainer').classList.toggle('hidden', !gameState.visualsVisible);
 
             if (gameState.currentType === 'toMixed') {
                 // حالت ۱: کسر بزرگ‌تر از واحد به عدد مخلوط
@@ -555,7 +726,7 @@
                     </div>
                 `;
 
-                setTimeout(() => document.getElementById('inputWhole')?.focus(), 100);
+                if (!restoring) setTimeout(() => document.getElementById('inputWhole')?.focus(), 100);
 
             } else {
                 // حالت ۲: عدد مخلوط به کسر بزرگ‌تر از واحد
@@ -586,23 +757,27 @@
                     </div>
                 `;
 
-                setTimeout(() => document.getElementById('inputImpNum')?.focus(), 100);
+                if (!restoring) setTimeout(() => document.getElementById('inputImpNum')?.focus(), 100);
             }
         }
 
         // --- نمایش راهنمایی گام‌به‌گام ---
-        function showStepHint() {
-            if (gameState.answered) return;
-            playSound('click');
-            gameState.hintUsed = true;
+        function resetFeedbackStyles() {
+            const feedbackBox = document.getElementById('feedbackBox');
+            feedbackBox.classList.remove(
+                'hidden',
+                'bg-emerald-50', 'border-emerald-300', 'border-emerald-400', 'text-emerald-900', 'text-emerald-950',
+                'bg-rose-50', 'border-rose-300', 'border-rose-400', 'text-rose-900', 'text-rose-950',
+                'bg-amber-50', 'border-amber-300', 'text-amber-950'
+            );
+        }
 
+        function renderHintFeedback() {
             const feedbackBox = document.getElementById('feedbackBox');
             const feedbackTitle = document.getElementById('feedbackTitle');
             const feedbackExp = document.getElementById('feedbackExplanation');
-
-            feedbackBox.classList.remove('hidden', 'bg-emerald-50', 'border-emerald-300', 'text-emerald-900', 'bg-rose-50', 'border-rose-300', 'text-rose-900');
+            resetFeedbackStyles();
             feedbackBox.classList.add('bg-amber-50', 'border-amber-300', 'text-amber-950');
-
             feedbackTitle.textContent = '💡 راهنمای حل مرحله‌ای:';
 
             if (gameState.currentType === 'toMixed') {
@@ -620,18 +795,65 @@
             }
         }
 
+        function renderCorrectFeedback() {
+            const feedbackBox = document.getElementById('feedbackBox');
+            resetFeedbackStyles();
+            feedbackBox.classList.add('bg-emerald-50', 'border-emerald-400', 'text-emerald-950');
+            document.getElementById('feedbackTitle').textContent =
+                `🎉 آفرین! کاملاً درست بود (+${toPersianDigits(gameState.earnedPoints)} امتیاز)`;
+            document.getElementById('feedbackExplanation').textContent =
+                gameState.currentType === 'toMixed'
+                    ? `چون ${toPersianDigits(gameState.improperNumerator)} تقسیم بر ${toPersianDigits(gameState.denominator)} می‌شود ${toPersianDigits(gameState.whole)} و باقی‌مانده آن ${toPersianDigits(gameState.numerator)} است.`
+                    : `(${toPersianDigits(gameState.whole)} × ${toPersianDigits(gameState.denominator)}) + ${toPersianDigits(gameState.numerator)} = ${toPersianDigits(gameState.improperNumerator)} و مخرج همان ${toPersianDigits(gameState.denominator)} می‌ماند.`;
+            document.getElementById('checkBtn').classList.add('hidden');
+            document.getElementById('nextBtn').classList.remove('hidden');
+        }
+
+        function renderIncorrectFeedback() {
+            const feedbackBox = document.getElementById('feedbackBox');
+            resetFeedbackStyles();
+            feedbackBox.classList.add('bg-rose-50', 'border-rose-400', 'text-rose-950');
+            document.getElementById('feedbackTitle').textContent = '❌ اشتباه شد! دوباره تلاش کن';
+            document.getElementById('feedbackExplanation').textContent =
+                gameState.feedbackKind === 'incorrectDenominator'
+                    ? `نکته مهم: مخرج کسر در تبدیل تغییر نمی‌کند! مخرج باید همان ${toPersianDigits(gameState.denominator)} باشد. به پیتزاها نگاه کن که به چند قسمت تقسیم شده‌اند.`
+                    : 'به شکل پیتزاها دقت کن یا روی دکمه «راهنمایی» کلیک کن تا روش حل را ببینی.';
+        }
+
+        function renderSavedFeedback() {
+            if (gameState.feedbackKind === 'none') return;
+            if (gameState.feedbackKind === 'hint') {
+                renderHintFeedback();
+            } else if (gameState.feedbackKind === 'correct') {
+                renderCorrectFeedback();
+            } else if (gameState.feedbackKind === 'incorrect' ||
+                       gameState.feedbackKind === 'incorrectDenominator') {
+                renderIncorrectFeedback();
+            } else {
+                resetFeedbackStyles();
+                document.getElementById('feedbackBox').classList.add('bg-rose-50', 'border-rose-300', 'text-rose-900');
+                document.getElementById('feedbackTitle').textContent = '⚠️ لطفاً تمام جاهای خالی را پر کن!';
+                document.getElementById('feedbackExplanation').textContent =
+                    'همه بخش‌های کسر یا عدد مخلوط باید با عدد پر شوند.';
+            }
+        }
+
+        function showStepHint(restoring = false) {
+            if (gameState.answered) return;
+            if (!restoring) playSound('click');
+            gameState.hintUsed = true;
+            gameState.feedbackKind = 'hint';
+            renderHintFeedback();
+        }
+
         // --- بررسی پاسخ کاربر ---
         function checkAnswer() {
             if (gameState.answered) return;
 
-            const feedbackBox = document.getElementById('feedbackBox');
-            const feedbackTitle = document.getElementById('feedbackTitle');
-            const feedbackExp = document.getElementById('feedbackExplanation');
             const gameCard = document.getElementById('gameCard');
 
             let isCorrect = false;
             let isEmpty = false;
-            let explanationText = '';
 
             if (gameState.currentType === 'toMixed') {
                 const uWhole = parseInt(document.getElementById('inputWhole').value);
@@ -642,7 +864,6 @@
                     isEmpty = true;
                 } else {
                     isCorrect = (uWhole === gameState.whole && uNum === gameState.numerator && uDenom === gameState.denominator);
-                    explanationText = `چون ${toPersianDigits(gameState.improperNumerator)} تقسیم بر ${toPersianDigits(gameState.denominator)} می‌شود ${toPersianDigits(gameState.whole)} و باقی‌مانده آن ${toPersianDigits(gameState.numerator)} است.`;
                 }
             } else {
                 const uImpNum = parseInt(document.getElementById('inputImpNum').value);
@@ -652,39 +873,29 @@
                     isEmpty = true;
                 } else {
                     isCorrect = (uImpNum === gameState.improperNumerator && uImpDenom === gameState.denominator);
-                    explanationText = `(${toPersianDigits(gameState.whole)} × ${toPersianDigits(gameState.denominator)}) + ${toPersianDigits(gameState.numerator)} = ${toPersianDigits(gameState.improperNumerator)} و مخرج همان ${toPersianDigits(gameState.denominator)} می‌ماند.`;
                 }
             }
 
             // اگر کاربر فیلدها را پر نکرده باشد
             if (isEmpty) {
                 playSound('wrong');
+                gameState.feedbackKind = 'incomplete';
                 gameCard.classList.remove('animate-shake');
                 void gameCard.offsetWidth; // ریست انیمیشن
                 gameCard.classList.add('animate-shake');
-
-                feedbackBox.classList.remove('hidden', 'bg-emerald-50', 'border-emerald-300', 'text-emerald-900', 'bg-amber-50', 'border-amber-300');
-                feedbackBox.classList.add('bg-rose-50', 'border-rose-300', 'text-rose-900');
-                feedbackTitle.textContent = '⚠️ لطفاً تمام جاهای خالی را پر کن!';
-                feedbackExp.textContent = 'همه بخش‌های کسر یا عدد مخلوط باید با عدد پر شوند.';
+                renderSavedFeedback();
                 return;
             }
 
             if (isCorrect) {
-                // پاسخ صحیح
                 gameState.answered = true;
-                playSound('correct');
-
-                // امتیاز بیشتر برای سطوح سخت‌تر
-                const difficultyBonus = { easy: 10, medium: 10, hard: 15, expert: 20, master: 30 };
-                const basePoints = difficultyBonus[gameState.difficulty] || 10;
-                const earnedPoints = gameState.hintUsed ? Math.ceil(basePoints / 2) : basePoints;
-                gameState.score += earnedPoints;
+                gameState.feedbackKind = 'correct';
+                gameState.earnedPoints = Math.ceil(ANSWER_POINTS[gameState.difficulty] / (gameState.hintUsed ? 2 : 1));
+                gameState.score += gameState.earnedPoints;
                 gameState.streak += 1;
-
                 updateScoreboard();
-
-                // جشن کاغذ رنگی
+                renderCorrectFeedback();
+                playSound('correct');
                 if (typeof confetti === 'function') {
                     confetti({
                         particleCount: 65,
@@ -692,15 +903,6 @@
                         origin: { y: 0.65 }
                     });
                 }
-
-                feedbackBox.classList.remove('hidden', 'bg-rose-50', 'border-rose-300', 'text-rose-900', 'bg-amber-50', 'border-amber-300');
-                feedbackBox.classList.add('bg-emerald-50', 'border-emerald-400', 'text-emerald-950');
-                feedbackTitle.textContent = `🎉 آفرین! کاملاً درست بود (+${toPersianDigits(earnedPoints)} امتیاز)`;
-                feedbackExp.textContent = explanationText;
-
-                // تغییر دکمه به سوال بعدی
-                document.getElementById('checkBtn').classList.add('hidden');
-                document.getElementById('nextBtn').classList.remove('hidden');
                 document.getElementById('nextBtn').focus();
 
             } else {
@@ -713,20 +915,13 @@
                 void gameCard.offsetWidth;
                 gameCard.classList.add('animate-shake');
 
-                feedbackBox.classList.remove('hidden', 'bg-emerald-50', 'border-emerald-300', 'text-emerald-900', 'bg-amber-50', 'border-amber-300');
-                feedbackBox.classList.add('bg-rose-50', 'border-rose-400', 'text-rose-950');
-                feedbackTitle.textContent = '❌ اشتباه شد! دوباره تلاش کن';
-                
-                // تشخیص خطای رایج دانش‌آموزان (تغییر دادن مخرج)
                 const denomInput = gameState.currentType === 'toMixed' 
                     ? parseInt(document.getElementById('inputDenom').value)
                     : parseInt(document.getElementById('inputImpDenom').value);
-
-                if (denomInput !== gameState.denominator) {
-                    feedbackExp.innerHTML = `<strong>نکته مهم:</strong> مخرج کسر در تبدیل تغییر نمی‌کند! مخرج باید همان <strong>${toPersianDigits(gameState.denominator)}</strong> باشد. به پیتزاها نگاه کن که به چند قسمت تقسیم شده‌اند.`;
-                } else {
-                    feedbackExp.textContent = 'به شکل پیتزاها دقت کن یا روی دکمه «راهنمایی» کلیک کن تا روش حل را ببینی.';
-                }
+                gameState.feedbackKind = denomInput !== gameState.denominator
+                    ? 'incorrectDenominator'
+                    : 'incorrect';
+                renderSavedFeedback();
             }
         }
 
